@@ -48,6 +48,20 @@
         <iframe id="topologyFrame" title="Host and storage topology" sandbox="allow-same-origin"></iframe>
       </section>
 
+      <section id="impactView" class="impact" hidden>
+        <div class="impact-controls">
+          <label class="impact-pick" for="impactSearch">If this fails…</label>
+          <div class="combo">
+            <input id="impactSearch" type="text" role="combobox" aria-expanded="false" aria-controls="impactList"
+                   aria-autocomplete="list" aria-label="Host or datastore to assess" autocomplete="off" spellcheck="false"
+                   placeholder="Search hosts and datastores…">
+            <ul id="impactList" class="combo-list" role="listbox" aria-label="Hosts and datastores" hidden></ul>
+          </div>
+          <p class="hint">Answers from the inventory already loaded: which VMs sit on it, which hosts reach it, and whether the cluster could take the load.</p>
+        </div>
+        <div id="impactResult" class="impact-result"></div>
+      </section>
+
       <section id="tableView" class="table-view" hidden>
         <div class="table-wrap">
           <table>
@@ -118,6 +132,7 @@
   <script src="vim.js"></script>
   <script src="sheets.js"></script>
   <script src="insights.js"></script>
+  <script src="impact.js"></script>
   <script src="xlsx.js"></script>
   <script src="report.js"></script>
   <script src="insights-report.js"></script>

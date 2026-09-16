@@ -8,6 +8,7 @@ const $ = (id) => document.getElementById(id);
 const APP_VERSION = "0.3.0";
 const INSIGHTS = "Insights";
 const TOPOLOGY = "Topology";
+const IMPACT = "Impact";
 const EXPLORER = "API Explorer";
 const ALL = "all";
 const PAGE_SIZES = [5, 10, 25, 50, 100, 250, 500, 0]; // 0 = all rows
@@ -54,8 +55,10 @@ const state = {
   loadedAt: null,
   busy: 0,
   insights: null, // the dashboard currently shown, for Download HTML
+  fabric: null, // hosts, datastores and VMs joined up, for Impact
+  impactTarget: readPref("impactTarget", ""),
 };
-if (![INSIGHTS, TOPOLOGY, EXPLORER].includes(state.view) && !SHEET_BY_NAME.has(state.view)) state.view = INSIGHTS;
+if (![INSIGHTS, TOPOLOGY, IMPACT, EXPLORER].includes(state.view) && !SHEET_BY_NAME.has(state.view)) state.view = INSIGHTS;
 if (!PAGE_SIZES.includes(state.pageSize)) state.pageSize = DEFAULT_PAGE_SIZE;
 
 function make(tag, className, text) {
@@ -239,7 +242,7 @@ function renderNav() {
   nav.replaceChildren();
 
   const groups = new Map([
-    ["Overview", [INSIGHTS, TOPOLOGY]],
+    ["Overview", [INSIGHTS, TOPOLOGY, IMPACT]],
     ["Tools", [EXPLORER]],
   ]);
   for (const sheet of SHEETS) {
@@ -282,6 +285,7 @@ function setView(view) {
   const isSheet = SHEET_BY_NAME.has(view);
   $("dashboard").hidden = view !== INSIGHTS;
   $("topologyView").hidden = view !== TOPOLOGY;
+  $("impactView").hidden = view !== IMPACT;
   $("tableView").hidden = !isSheet;
   $("explorerView").hidden = view !== EXPLORER;
   $("filter").hidden = !isSheet;
@@ -572,6 +576,209 @@ function renderDashboard(i) {
   board.append(row2);
 }
 
+// ---------- Impact ----------
+
+// The picker is a searchable combobox, not a <select>: a large estate has hundreds of
+// hosts and datastores, and a native list can only be typed at one letter at a time.
+const COMBO_SHOWN = 200; // rows rendered at once; the rest need a narrower search
+
+const combo = { options: [], matches: [], active: -1, open: false, query: "" };
+
+function fillImpactTargets() {
+  const many = state.fabric.servers.length > 1;
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  combo.options = [];
+  state.fabric.servers.forEach((server, index) => {
+    for (const host of server.hosts) {
+      combo.options.push({
+        value: `${index}:host:${host.moref}`,
+        label: host.name,
+        group: many ? `Hosts · ${server.server}` : "Hosts",
+        detail: `${host.cluster ?? "Standalone"} · ${plural(host.vms.length, "VM")}`,
+      });
+    }
+    for (const ds of server.datastores) {
+      combo.options.push({
+        value: `${index}:datastore:${ds.moref}`,
+        label: ds.name,
+        group: many ? `Datastores · ${server.server}` : "Datastores",
+        detail: `${ds.kind ?? "Datastore"} · ${plural(ds.vms.length, "VM")} · ${plural(ds.hosts.length, "host")}`,
+      });
+    }
+  });
+
+  const chosen = combo.options.find((o) => o.value === state.impactTarget) ?? combo.options[0] ?? null;
+  state.impactTarget = chosen?.value ?? "";
+  $("impactSearch").value = chosen?.label ?? "";
+  $("impactSearch").disabled = combo.options.length === 0;
+  closeCombo(false);
+}
+
+/** Every term has to appear somewhere in the row, so "cl-02 vmfs" narrows twice. */
+function comboMatches(query) {
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return combo.options;
+  return combo.options.filter((o) => {
+    const hay = `${o.label} ${o.group} ${o.detail}`.toLowerCase();
+    return terms.every((t) => hay.includes(t));
+  });
+}
+
+/** Opening from the field shows everything with the current choice highlighted; typing jumps to the first match. */
+function openCombo(keepSelected) {
+  combo.matches = comboMatches(combo.query);
+  combo.open = true;
+  combo.active = keepSelected ? combo.matches.findIndex((o) => o.value === state.impactTarget) : 0;
+  if (combo.active < 0 && combo.matches.length) combo.active = 0;
+  renderCombo();
+}
+
+function closeCombo(restore = true) {
+  combo.open = false;
+  combo.active = -1;
+  renderCombo();
+  if (restore) {
+    const current = combo.options.find((o) => o.value === state.impactTarget);
+    $("impactSearch").value = current?.label ?? "";
+  }
+}
+
+function moveCombo(delta) {
+  const count = Math.min(combo.matches.length, COMBO_SHOWN);
+  if (!count) return;
+  combo.active = (combo.active + delta + count) % count;
+  renderCombo();
+}
+
+/** Takes the option itself, never a row index: the list can re-filter between render and click. */
+function chooseCombo(option) {
+  if (!option) return;
+  state.impactTarget = option.value;
+  writePref("impactTarget", option.value);
+  $("impactSearch").value = option.label;
+  closeCombo(false);
+  renderImpactSelection();
+}
+
+function renderCombo() {
+  const input = $("impactSearch");
+  const list = $("impactList");
+  list.replaceChildren();
+  list.hidden = !combo.open;
+  input.setAttribute("aria-expanded", String(combo.open));
+  input.removeAttribute("aria-activedescendant");
+  if (!combo.open) return;
+
+  if (!combo.matches.length) {
+    list.append(make("li", "combo-empty", "Nothing matches that."));
+    return;
+  }
+
+  let group = null;
+  combo.matches.slice(0, COMBO_SHOWN).forEach((option, i) => {
+    if (option.group !== group) {
+      group = option.group;
+      list.append(make("li", "combo-group", group));
+    }
+    const li = make("li", `combo-option${i === combo.active ? " active" : ""}`);
+    li.id = `impactOption${i}`;
+    li.setAttribute("role", "option");
+    li.setAttribute("aria-selected", String(option.value === state.impactTarget));
+    li.append(make("span", "combo-label", option.label), make("span", "combo-detail", option.detail));
+    // Clicking must not blur the field first, or the list would close before the click lands.
+    li.addEventListener("mousedown", (event) => event.preventDefault());
+    li.addEventListener("click", () => chooseCombo(option));
+    list.append(li);
+  });
+  if (combo.matches.length > COMBO_SHOWN) {
+    list.append(make("li", "combo-empty", `${combo.matches.length - COMBO_SHOWN} more — keep typing to narrow the list.`));
+  }
+
+  const active = combo.active >= 0 ? $(`impactOption${combo.active}`) : null;
+  if (active) {
+    input.setAttribute("aria-activedescendant", active.id);
+    active.scrollIntoView({ block: "nearest" });
+  }
+}
+
+/** A cell is plain text, or { num } to right-align it. */
+function miniTable(columns, rows) {
+  const table = make("table", "mini-table");
+  const head = make("tr");
+  for (const label of columns) head.append(make("th", "", label));
+  const thead = make("thead");
+  thead.append(head);
+  const tbody = make("tbody");
+  for (const row of rows) {
+    const tr = make("tr");
+    row.forEach((cell, i) => {
+      const numeric = cell && typeof cell === "object";
+      const td = make("td", numeric ? "num" : "", numeric ? cell.num : cell);
+      if (i === 0) td.title = String(cell);
+      tr.append(td);
+    });
+    tbody.append(tr);
+  }
+  table.append(thead, tbody);
+  const wrap = make("div", "mini-wrap impact-scroll");
+  wrap.append(table);
+  return wrap;
+}
+
+function renderImpact(box, r) {
+  const head = make("div", "impact-head");
+  head.append(make("h2", "", r.title));
+  head.append(make("p", "impact-sub", state.fabric.servers.length > 1 ? `${r.subtitle} · ${r.server}` : r.subtitle));
+  box.append(head);
+
+  const verdict = make("div", `verdict ${r.severity}`);
+  verdict.append(make("strong", "", r.headline), make("p", "", r.detail));
+  box.append(verdict);
+
+  const kpis = make("div", "kpi-row");
+  for (const [label, value, sub] of r.kpis) kpis.append(kpi(label, value, sub, r.severity === "crit" ? "hero" : "muted"));
+  box.append(kpis);
+
+  const row = make("div", "panel-row");
+  const facts = make("div", "card");
+  facts.append(make("p", "card-title", r.kind === "host" ? "Host and cluster" : "Datastore"));
+  const stats = make("div", "stat-list");
+  for (const [k, v] of r.facts) stats.append(statLine(k, v));
+  facts.append(stats);
+
+  const main = make("div", "card");
+  main.append(make("p", "card-title", r.table.title));
+  main.append(r.table.rows.length ? miniTable(r.table.columns, r.table.rows) : make("p", "empty-note", r.table.empty));
+  row.append(facts, main);
+  box.append(row);
+
+  for (const list of r.lists) {
+    const card = make("div", "card");
+    card.append(make("p", "card-title", list.title));
+    if (list.note) card.append(make("p", "impact-note", list.note));
+    card.append(miniTable(list.columns, list.rows));
+    box.append(card);
+  }
+}
+
+function renderImpactSelection() {
+  const box = $("impactResult");
+  box.replaceChildren();
+  const [index, kind, ...rest] = state.impactTarget.split(":");
+  const moref = rest.join(":");
+  const server = state.fabric?.servers[Number(index)];
+  const item = server && (kind === "host" ? server.hosts : server.datastores).find((x) => x.moref === moref);
+  if (!item) {
+    box.append(make("p", "empty-note", "Pick a host or datastore to see what depends on it."));
+    setStatus(loadedAtText().replace(/^ · /, ""));
+    return;
+  }
+
+  const result = kind === "host" ? hostImpact(server, item) : datastoreImpact(server, item);
+  renderImpact(box, result);
+  setStatus(`${result.title} · ${result.status}${loadedAtText()}`);
+}
+
 // ---------- loading ----------
 
 async function load() {
@@ -592,6 +799,8 @@ async function load() {
     $("dashboard").replaceChildren();
   } else if (view === TOPOLOGY) {
     $("topologyFrame").srcdoc = "";
+  } else if (view === IMPACT) {
+    $("impactResult").replaceChildren();
   } else {
     state.table = null;
     renderHead();
@@ -606,7 +815,13 @@ async function load() {
 
   const data = selectedData();
   setStatus(
-    view === INSIGHTS ? "Building insights…" : view === TOPOLOGY ? "Mapping hosts and datastores…" : `Querying vCenter for ${view}…`,
+    view === INSIGHTS
+      ? "Building insights…"
+      : view === TOPOLOGY
+        ? "Mapping hosts and datastores…"
+        : view === IMPACT
+          ? "Working out what depends on what…"
+          : `Querying vCenter for ${view}…`,
   );
   busyStart();
   try {
@@ -630,6 +845,14 @@ async function load() {
       frame.addEventListener("load", () => frame.contentDocument && TopologyReport.attachHover(frame.contentDocument), { once: true });
       frame.srcdoc = TopologyReport.render(topology, APP_VERSION, { embedded: true });
       setStatus(`${topologySummary(topology)}${loadedAtText()}`);
+    } else if (view === IMPACT) {
+      const fabric = await buildFabric(data);
+      if (token !== state.loadToken) return;
+      state.loadedAt ??= new Date();
+      state.fabric = fabric;
+      renderWarnings(fabric.warnings);
+      fillImpactTargets();
+      renderImpactSelection();
     } else {
       const table = await buildTable(SHEET_BY_NAME.get(view), data);
       if (token !== state.loadToken) return;
@@ -652,6 +875,7 @@ async function load() {
 
 function refresh() {
   state.data = new Map();
+  state.fabric = null;
   state.rowCounts.clear();
   state.loadedAt = null;
   renderNav();
@@ -822,6 +1046,49 @@ $("vcenterSelect").addEventListener("change", () => {
   state.rowCounts.clear();
   renderNav();
   load();
+});
+
+const impactSearch = $("impactSearch");
+impactSearch.addEventListener("focus", () => {
+  combo.query = "";
+  openCombo(true);
+  impactSearch.select();
+});
+impactSearch.addEventListener("click", () => {
+  if (combo.open) return;
+  // Clicking a field that already holds the current choice starts a new search,
+  // so the whole label is selected: typing replaces it instead of appending to it.
+  combo.query = "";
+  openCombo(true);
+  impactSearch.select();
+});
+impactSearch.addEventListener("input", () => {
+  combo.query = impactSearch.value;
+  openCombo(false);
+});
+impactSearch.addEventListener("blur", () => closeCombo(true));
+impactSearch.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    if (!combo.open) {
+      combo.query = "";
+      openCombo(true);
+    } else {
+      moveCombo(event.key === "ArrowDown" ? 1 : -1);
+    }
+  } else if (event.key === "Enter") {
+    if (combo.open && combo.active >= 0) {
+      event.preventDefault();
+      chooseCombo(combo.matches[combo.active]);
+    }
+  } else if (event.key === "Escape") {
+    if (combo.open) {
+      event.stopPropagation();
+      closeCombo(true);
+    }
+  } else if (event.key === "Tab") {
+    closeCombo(true);
+  }
 });
 
 $("explorerMode").addEventListener("change", updateExplorerMode);
