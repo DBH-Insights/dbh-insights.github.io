@@ -5,7 +5,7 @@
 
 const $ = (id) => document.getElementById(id);
 
-const APP_VERSION = "0.2.0";
+const APP_VERSION = "0.3.0";
 const INSIGHTS = "Insights";
 const TOPOLOGY = "Topology";
 const EXPLORER = "API Explorer";
@@ -13,6 +13,17 @@ const ALL = "all";
 const PAGE_SIZES = [5, 10, 25, 50, 100, 250, 500, 0]; // 0 = all rows
 const DEFAULT_PAGE_SIZE = 25;
 const SHEET_BY_NAME = new Map(SHEETS.map((s) => [s.name, s]));
+const GROUP_ORDER = [
+  "Overview",
+  "Inventory",
+  "Virtual machines",
+  "Host network & storage",
+  "Distributed switch",
+  "Performance",
+  "Health",
+  "System",
+  "Tools",
+];
 
 function readPref(key, fallback) {
   try {
@@ -194,7 +205,7 @@ async function checkHelper() {
     setConnection("Helper update needed", "bad", `Helper ${status.version}`);
     showNotice(
       "This page needs a newer DBH Insights Helper.",
-      `The running helper (${status.version}) can't make SOAP queries. Install DBH Insights Helper 0.2.0 or later.`,
+      `The running helper (${status.version}) can't make SOAP queries. Install DBH Insights Helper 0.3.0 or later.`,
     );
     return false;
   }
@@ -227,18 +238,22 @@ function renderNav() {
   const nav = $("nav");
   nav.replaceChildren();
 
-  const groups = [["Overview", [INSIGHTS, TOPOLOGY]]];
+  const groups = new Map([
+    ["Overview", [INSIGHTS, TOPOLOGY]],
+    ["Tools", [EXPLORER]],
+  ]);
   for (const sheet of SHEETS) {
-    let group = groups.find(([heading]) => heading === sheet.group);
-    if (!group) {
-      group = [sheet.group, []];
-      groups.push(group);
-    }
-    group[1].push(sheet.name);
+    if (!groups.has(sheet.group)) groups.set(sheet.group, []);
+    groups.get(sheet.group).push(sheet.name);
   }
-  groups.push(["Tools", [EXPLORER]]);
+  // Known groups first, in order; anything new appears after them rather than vanishing.
+  const headings = [
+    ...GROUP_ORDER.filter((g) => groups.has(g)),
+    ...[...groups.keys()].filter((g) => !GROUP_ORDER.includes(g)),
+  ];
 
-  for (const [heading, views] of groups) {
+  for (const heading of headings) {
+    const views = groups.get(heading);
     nav.append(make("p", "nav-heading", heading));
     for (const view of views) {
       const item = make("button", `nav-item${view === state.view ? " active" : ""}`);
@@ -671,14 +686,8 @@ async function exportXlsx() {
     for (const t of tables) state.rowCounts.set(t.name, t.rows.length);
     renderNav();
 
-    const created = new Date().toISOString();
-    const metadata = {
-      name: "vMetaData",
-      columns: [col.text("Tool"), col.text("Tool version"), col.text("xlsx creation datetime"), col.text("Server")],
-      rows: data.map((d) => ["DBH Insights", `DBH Insights ${APP_VERSION}`, created, d.vc.host]),
-    };
     const filename = `DBH_Insights_export_all_${timestamp()}.xlsx`;
-    downloadBlob(Xlsx.workbook([...tables, metadata]), filename);
+    downloadBlob(Xlsx.workbook(tables), filename);
 
     // A workbook missing a vCenter's rows has to say so, not just report a row count.
     renderWarnings([...new Set(tables.flatMap((t) => t.warnings))]);

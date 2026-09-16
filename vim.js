@@ -93,6 +93,89 @@ class ManagedObject {
 }
 
 /**
+ * Retrieve `props` for one object whose moref is already known (LicenseManager,
+ * PerformanceManager, …). These sit outside the inventory, so no container view applies.
+ */
+async function retrieveObject(api, type, moref, props) {
+  const pathSet = props.map((p) => `<vim25:pathSet>${xmlEscape(p)}</vim25:pathSet>`).join("");
+  const doc = await api.soap(
+    `<vim25:RetrievePropertiesEx><vim25:_this type="PropertyCollector">propertyCollector</vim25:_this>` +
+      `<vim25:specSet><vim25:propSet><vim25:type>${xmlEscape(type)}</vim25:type>${pathSet}</vim25:propSet>` +
+      `<vim25:objectSet><vim25:obj type="${xmlEscape(type)}">${xmlEscape(moref)}</vim25:obj>` +
+      `<vim25:skip>false</vim25:skip></vim25:objectSet></vim25:specSet><vim25:options/></vim25:RetrievePropertiesEx>`,
+  );
+  const returnval = firstByLocalName(doc, "returnval");
+  const objects = returnval ? childElements(returnval, "objects") : [];
+  return objects.length ? new ManagedObject(objects[0]) : null;
+}
+
+/**
+ * ServiceContent: vCenter's own version details (`about`) plus the morefs for the
+ * licence and performance managers. Needs no inventory access.
+ */
+async function serviceContent(api) {
+  const doc = await api.soap(
+    `<vim25:RetrieveServiceContent><vim25:_this type="ServiceInstance">ServiceInstance</vim25:_this></vim25:RetrieveServiceContent>`,
+  );
+  const returnval = firstByLocalName(doc, "returnval");
+  if (!returnval) throw new Error("RetrieveServiceContent returned nothing");
+  return returnval;
+}
+
+/** Performance counter ids, keyed "group.name.rollup" (e.g. "cpu.usage.average"). */
+async function perfCounterIds(api, perfManager) {
+  const manager = await retrieveObject(api, "PerformanceManager", perfManager, ["perfCounter"]);
+  const ids = new Map();
+  for (const counter of manager?.array("perfCounter") ?? []) {
+    const key = textAt(counter, "key");
+    const group = textAt(counter, "groupInfo/key");
+    const name = textAt(counter, "nameInfo/key");
+    const rollup = textAt(counter, "rollupType");
+    if (key && group && name && rollup) ids.set(`${group}.${name}.${rollup}`, key);
+  }
+  return ids;
+}
+
+/**
+ * The most recent sample of `counters` for each entity, in one QueryPerf call.
+ * `counters` maps a column key to a counter id. Returns Map moref → Map column key → number.
+ * Entities with no data (powered off, no provider) are simply absent.
+ */
+async function queryPerf(api, entityType, morefs, counters, intervalId = 20) {
+  if (!morefs.length || counters.size === 0) return new Map();
+  const metricIds = [...counters.values()]
+    .map((id) => `<vim25:metricId><vim25:counterId>${xmlEscape(id)}</vim25:counterId><vim25:instance></vim25:instance></vim25:metricId>`)
+    .join("");
+  const specs = morefs
+    .map(
+      (moref) =>
+        `<vim25:querySpec><vim25:entity type="${xmlEscape(entityType)}">${xmlEscape(moref)}</vim25:entity>` +
+        `<vim25:maxSample>1</vim25:maxSample>${metricIds}<vim25:intervalId>${xmlEscape(intervalId)}</vim25:intervalId></vim25:querySpec>`,
+    )
+    .join("");
+  const doc = await api.soap(
+    `<vim25:QueryPerf><vim25:_this type="PerformanceManager">${xmlEscape(api.perfManager ?? "PerfMgr")}</vim25:_this>${specs}</vim25:QueryPerf>`,
+  );
+
+  const byCounterId = new Map([...counters].map(([column, id]) => [id, column]));
+  const samples = new Map();
+  for (const metric of doc.getElementsByTagNameNS("*", "returnval")) {
+    const entity = childElement(metric, "entity")?.textContent;
+    if (!entity) continue;
+    const values = new Map();
+    for (const series of childElements(metric, "value")) {
+      const column = byCounterId.get(textAt(series, "id/counterId"));
+      const value = Number(childElement(series, "value")?.textContent);
+      // Aggregate (instance-less) series only; per-device series repeat the counter.
+      if (column && Number.isFinite(value) && !textAt(series, "id/instance")) values.set(column, value);
+    }
+    values.set("sampledAt", textAt(metric, "sampleInfo/timestamp"));
+    samples.set(entity, values);
+  }
+  return samples;
+}
+
+/**
  * Retrieve `props` for every managed object of `type` in the inventory.
  *
  * Follows the continuation token: silently accepting a truncated result would

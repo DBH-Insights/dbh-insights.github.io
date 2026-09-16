@@ -60,6 +60,41 @@ const VM_INVENTORY_PROPS = [
   "summary.runtime.maxCpuUsage",
   "summary.quickStats.guestMemoryUsage",
   "summary.config.memorySizeMB",
+  // vCPU
+  "config.cpuAllocation.shares.level",
+  "config.cpuAllocation.shares.shares",
+  "config.cpuAllocation.reservation",
+  "config.cpuAllocation.limit",
+  "config.cpuHotAddEnabled",
+  "config.cpuHotRemoveEnabled",
+  "summary.quickStats.staticCpuEntitlement",
+  "summary.quickStats.distributedCpuEntitlement",
+  // vMemory
+  "config.memoryAllocation.shares.level",
+  "config.memoryAllocation.shares.shares",
+  "config.memoryAllocation.reservation",
+  "config.memoryAllocation.limit",
+  "config.memoryHotAddEnabled",
+  "summary.quickStats.hostMemoryUsage",
+  "summary.quickStats.privateMemory",
+  "summary.quickStats.sharedMemory",
+  "summary.quickStats.swappedMemory",
+  "summary.quickStats.balloonedMemory",
+  "summary.quickStats.compressedMemory",
+  "summary.quickStats.consumedOverheadMemory",
+  "summary.quickStats.staticMemoryEntitlement",
+  "summary.quickStats.distributedMemoryEntitlement",
+  // vPartition and vTools
+  "guest.disk",
+  "guest.toolsStatus",
+  "guest.toolsVersion",
+  "guest.guestState",
+  "guest.guestId",
+  "guest.guestFamily",
+  "config.tools.toolsUpgradePolicy",
+  "config.tools.syncTimeWithHost",
+  "config.tools.afterPowerOn",
+  "config.tools.afterResume",
 ];
 
 // The device array backs vDisk, vNetwork and vHealth; snapshots back vSnapshot and vHealth.
@@ -114,9 +149,57 @@ const HOST_PROPS = [
   "hardware.cpuPowerManagementInfo.currentPolicy",
   "hardware.systemInfo.serialNumber",
   "hardware.systemInfo.otherIdentifyingInfo",
+  // vHBA, vNIC, vSwitch, vPort and vSC_VMK all come from these arrays.
+  "config.storageDevice.hostBusAdapter",
+  "config.network.pnic",
+  "config.network.vnic",
+  "config.network.vswitch",
+  "config.network.portgroup",
 ];
 
 const DATASTORE_PROPS = ["name", "summary.type", "summary.capacity", "summary.freeSpace", "summary.accessible", "host", "vm"];
+
+const RESOURCE_POOL_PROPS = [
+  "name",
+  "owner",
+  "overallStatus",
+  "vm",
+  "config.cpuAllocation.limit",
+  "config.cpuAllocation.reservation",
+  "config.cpuAllocation.shares.level",
+  "config.cpuAllocation.shares.shares",
+  "config.memoryAllocation.limit",
+  "config.memoryAllocation.reservation",
+  "config.memoryAllocation.shares.level",
+  "config.memoryAllocation.shares.shares",
+  "summary.quickStats.overallCpuUsage",
+  "summary.quickStats.guestMemoryUsage",
+  "summary.quickStats.hostMemoryUsage",
+];
+
+const DVSWITCH_PROPS = [
+  "name",
+  "uuid",
+  "summary.productInfo",
+  "summary.numPorts",
+  "summary.hostMember",
+  "config.maxPorts",
+  "config.createTime",
+];
+
+const DVPORTGROUP_PROPS = ["name", "key", "config.numPorts", "config.type", "config.defaultPortConfig", "config.distributedVirtualSwitch"];
+
+/** Performance counters, by the column they fill. */
+const HOST_COUNTERS = {
+  cpuPercent: "cpu.usage.average",
+  cpuMhz: "cpu.usagemhz.average",
+  memoryPercent: "mem.usage.average",
+  memoryConsumed: "mem.consumed.average",
+  network: "net.usage.average",
+  disk: "disk.usage.average",
+};
+
+const VM_COUNTERS = { ...HOST_COUNTERS, memoryActive: "mem.active.average" };
 
 /**
  * Everything fetched from one vCenter. Queries are cached as promises, so switching
@@ -165,6 +248,55 @@ class VcenterData {
   /** REST: network id (dvportgroup-…, network-…) → name. */
   restNetworks() {
     return this.once("restNetworks", () => this.api.get("/api/vcenter/network"));
+  }
+
+  resourcePools() {
+    return this.once("resourcePools", () => retrieve(this.api, "ResourcePool", RESOURCE_POOL_PROPS));
+  }
+  dvSwitches() {
+    return this.once("dvSwitches", () => retrieve(this.api, "VmwareDistributedVirtualSwitch", DVSWITCH_PROPS));
+  }
+  dvPortgroups() {
+    return this.once("dvPortgroups", () => retrieve(this.api, "DistributedVirtualPortgroup", DVPORTGROUP_PROPS));
+  }
+  /** vCenter's own version details, plus the morefs for licences and performance. */
+  serviceContent() {
+    return this.once("serviceContent", () => serviceContent(this.api));
+  }
+  licenses() {
+    return this.once("licenses", async () => {
+      const content = await this.serviceContent();
+      const manager = await retrieveObject(this.api, "LicenseManager", textAt(content, "licenseManager") ?? "LicenseManager", ["licenses"]);
+      return manager?.array("licenses") ?? [];
+    });
+  }
+  perfCounters() {
+    return this.once("perfCounters", async () => {
+      const content = await this.serviceContent();
+      // queryPerf() reads this when addressing the performance manager.
+      this.api.perfManager = textAt(content, "perfManager") ?? "PerfMgr";
+      return perfCounterIds(this.api, this.api.perfManager);
+    });
+  }
+
+  /** Latest performance sample per entity. Older helpers refuse the query; say so plainly. */
+  async perfSamples(key, entityType, morefs, wanted) {
+    return this.once(key, async () => {
+      try {
+        const ids = await this.perfCounters();
+        const counters = new Map();
+        for (const [column, counter] of Object.entries(wanted)) {
+          const id = ids.get(counter);
+          if (id) counters.set(column, id);
+        }
+        return await queryPerf(this.api, entityType, morefs, counters);
+      } catch (err) {
+        if (err.kind === "soap_not_allowed") {
+          throw new Error("Performance data needs DBH Insights Helper 0.3.0 or later.");
+        }
+        throw err;
+      }
+    });
   }
 
   /** HostSystem moref → host name. */
@@ -238,6 +370,40 @@ function identifyingInfo(host, key) {
   const entry = host.array("hardware.systemInfo.otherIdentifyingInfo").find((e) => textAt(e, "identifierType/key") === key);
   const value = entry ? textAt(entry, "identifierValue") : null;
   return value && value !== "Default string" ? value : null;
+}
+
+/** A world wide name as vCenter reports it (a decimal number) in the usual hex form. */
+function wwn(value) {
+  if (value === null) return null;
+  try {
+    return BigInt(value).toString(16).padStart(16, "0").replace(/(.{2})(?=.)/g, "$1:");
+  } catch {
+    return String(value);
+  }
+}
+
+/** A distributed port group setting, which wraps its value: <securityPolicy><allowPromiscuous><value>. */
+function dvBool(el, path) {
+  const text = textAt(el, `${path}/value`);
+  return text === "true" ? true : text === "false" ? false : null;
+}
+
+/** VLAN of a distributed port group: a single id, a trunk range, or private VLAN. */
+function dvVlan(portConfig) {
+  const vlan = portConfig && childElement(portConfig, "vlan");
+  if (!vlan) return null;
+  const single = textAt(vlan, "vlanId");
+  if (single !== null) return single;
+  const ranges = childElements(vlan, "vlanId")
+    .map((r) => {
+      const start = textAt(r, "start");
+      const end = textAt(r, "end");
+      return start === end ? start : `${start}-${end}`;
+    })
+    .filter(Boolean);
+  if (ranges.length) return `trunk ${ranges.join(", ")}`;
+  const pvlan = textAt(vlan, "pvlanId");
+  return pvlan === null ? null : `pvlan ${pvlan}`;
 }
 
 // ---------- snapshot helpers ----------
@@ -349,6 +515,129 @@ const SHEETS = [
   },
 
   {
+    name: "vCPU",
+    group: "Virtual machines",
+    columns: [
+      col.text("VM"),
+      col.text("Powerstate"),
+      col.bool("Template"),
+      col.number("CPUs"),
+      col.number("Sockets"),
+      col.number("Cores p/s"),
+      col.number("Overall MHz"),
+      col.number("Max MHz"),
+      col.number("CPU Usage (%)"),
+      col.text("Level"),
+      col.number("Shares"),
+      col.number("Reservation"),
+      col.number("Limit"),
+      col.number("Entitlement"),
+      col.number("DRS Entitlement"),
+      col.bool("Hot Add"),
+      col.bool("Hot Remove"),
+      col.text("Host"),
+      col.text("Annotation"),
+    ],
+    async rows(d) {
+      const [hosts, vms] = await Promise.all([d.hostNames(), d.vmInventory()]);
+      const rows = [];
+      for (const vm of vms) {
+        const ctx = vmContext(vm, hosts);
+        if (!ctx) continue;
+        const cpus = vm.num("config.hardware.numCPU");
+        const coresPerSocket = vm.num("config.hardware.numCoresPerSocket");
+        const used = vm.num("summary.quickStats.overallCpuUsage");
+        const max = vm.num("summary.runtime.maxCpuUsage");
+        rows.push([
+          ctx.name,
+          ctx.powerState,
+          ctx.template,
+          cpus,
+          cpus !== null && coresPerSocket ? cpus / coresPerSocket : null,
+          coresPerSocket,
+          used,
+          max,
+          percent(used, max),
+          vm.str("config.cpuAllocation.shares.level"),
+          vm.num("config.cpuAllocation.shares.shares"),
+          vm.num("config.cpuAllocation.reservation"),
+          vm.num("config.cpuAllocation.limit"),
+          vm.num("summary.quickStats.staticCpuEntitlement"),
+          vm.num("summary.quickStats.distributedCpuEntitlement"),
+          vm.bool("config.cpuHotAddEnabled"),
+          vm.bool("config.cpuHotRemoveEnabled"),
+          ctx.host,
+          ctx.annotation,
+        ]);
+      }
+      return rows;
+    },
+  },
+
+  {
+    // quickStats memory values are MiB; memoryOverhead is bytes.
+    name: "vMemory",
+    group: "Virtual machines",
+    columns: [
+      col.text("VM"),
+      col.text("Powerstate"),
+      col.bool("Template"),
+      col.number("Size MiB"),
+      col.number("Consumed MiB"),
+      col.number("Active MiB"),
+      col.number("Memory Usage (%)"),
+      col.number("Private MiB"),
+      col.number("Shared MiB"),
+      col.number("Swapped MiB"),
+      col.number("Ballooned MiB"),
+      col.number("Compressed MiB"),
+      col.number("Consumed Overhead MiB"),
+      col.number("Entitlement"),
+      col.number("DRS Entitlement"),
+      col.text("Level"),
+      col.number("Shares"),
+      col.number("Reservation"),
+      col.number("Limit"),
+      col.bool("Hot Add"),
+      col.text("Host"),
+      col.text("Annotation"),
+    ],
+    async rows(d) {
+      const [hosts, vms] = await Promise.all([d.hostNames(), d.vmInventory()]);
+      const rows = [];
+      for (const vm of vms) {
+        const ctx = vmContext(vm, hosts);
+        if (!ctx) continue;
+        rows.push([
+          ctx.name,
+          ctx.powerState,
+          ctx.template,
+          vm.num("config.hardware.memoryMB"),
+          vm.num("summary.quickStats.hostMemoryUsage"),
+          vm.num("summary.quickStats.guestMemoryUsage"),
+          percent(vm.num("summary.quickStats.guestMemoryUsage"), vm.num("summary.config.memorySizeMB")),
+          vm.num("summary.quickStats.privateMemory"),
+          vm.num("summary.quickStats.sharedMemory"),
+          vm.num("summary.quickStats.swappedMemory"),
+          vm.num("summary.quickStats.balloonedMemory"),
+          vm.num("summary.quickStats.compressedMemory"),
+          vm.num("summary.quickStats.consumedOverheadMemory"),
+          vm.num("summary.quickStats.staticMemoryEntitlement"),
+          vm.num("summary.quickStats.distributedMemoryEntitlement"),
+          vm.str("config.memoryAllocation.shares.level"),
+          vm.num("config.memoryAllocation.shares.shares"),
+          vm.num("config.memoryAllocation.reservation"),
+          vm.num("config.memoryAllocation.limit"),
+          vm.bool("config.memoryHotAddEnabled"),
+          ctx.host,
+          ctx.annotation,
+        ]);
+      }
+      return rows;
+    },
+  },
+
+  {
     name: "vDisk",
     group: "Virtual machines",
     columns: [
@@ -414,6 +703,47 @@ const SHEETS = [
             numberAt(disk, "unitNumber"),
             backing && textAt(backing, "lunUuid"),
             backing && textAt(backing, "compatibilityMode"),
+            ctx.host,
+            ctx.annotation,
+          ]);
+        }
+      }
+      return rows;
+    },
+  },
+
+  {
+    // Guest filesystems, as VMware Tools reports them. VMs without Tools running have none.
+    name: "vPartition",
+    group: "Virtual machines",
+    columns: [
+      col.text("VM"),
+      col.text("Powerstate"),
+      col.text("Disk"),
+      col.number("Capacity MiB"),
+      col.number("Consumed MiB"),
+      col.number("Free MiB"),
+      col.number("Free %"),
+      col.text("Host"),
+      col.text("Annotation"),
+    ],
+    async rows(d) {
+      const [hosts, vms] = await Promise.all([d.hostNames(), d.vmInventory()]);
+      const rows = [];
+      for (const vm of vms) {
+        const ctx = vmContext(vm, hosts);
+        if (!ctx) continue;
+        for (const disk of vm.array("guest.disk")) {
+          const capacity = numberAt(disk, "capacity");
+          const free = numberAt(disk, "freeSpace");
+          rows.push([
+            ctx.name,
+            ctx.powerState,
+            textAt(disk, "diskPath"),
+            bytesToMiB(capacity),
+            capacity !== null && free !== null ? bytesToMiB(capacity - free) : null,
+            bytesToMiB(free),
+            percent(free, capacity),
             ctx.host,
             ctx.annotation,
           ]);
@@ -553,8 +883,138 @@ const SHEETS = [
   },
 
   {
+    name: "vCD",
+    group: "Virtual machines",
+    columns: [
+      col.text("VM"),
+      col.text("Powerstate"),
+      col.text("Device"),
+      col.bool("Connected"),
+      col.bool("Starts Connected"),
+      col.bool("Allow guest control"),
+      col.text("Backing"),
+      col.text("Device / ISO"),
+      col.text("Host"),
+      col.text("Annotation"),
+    ],
+    async rows(d) {
+      const [hosts, inventory, devices] = await Promise.all([d.hostNames(), d.vmsByMoref(), d.vmDevices()]);
+      const rows = [];
+      for (const vmDev of devices) {
+        const ctx = vmContext(inventory.get(vmDev.moref) ?? vmDev, hosts);
+        if (!ctx) continue;
+        for (const cdrom of vmDev.array("config.hardware.device").filter((dev) => xsiType(dev) === "VirtualCdrom")) {
+          const backing = childElement(cdrom, "backing");
+          rows.push([
+            ctx.name,
+            ctx.powerState,
+            textAt(cdrom, "deviceInfo/label"),
+            boolAt(cdrom, "connectable/connected"),
+            boolAt(cdrom, "connectable/startConnected"),
+            boolAt(cdrom, "connectable/allowGuestControl"),
+            (xsiType(backing) ?? "").replace(/^VirtualCdrom|BackingInfo$/g, "") || null,
+            backing && (textAt(backing, "fileName") ?? textAt(backing, "deviceName")),
+            ctx.host,
+            ctx.annotation,
+          ]);
+        }
+      }
+      return rows;
+    },
+  },
+
+  {
+    // USB controllers and any passed-through USB devices.
+    name: "vUSB",
+    group: "Virtual machines",
+    columns: [
+      col.text("VM"),
+      col.text("Powerstate"),
+      col.text("Device"),
+      col.text("Type"),
+      col.bool("Connected"),
+      col.bool("Auto connect"),
+      col.text("Summary"),
+      col.text("Host"),
+      col.text("Annotation"),
+    ],
+    async rows(d) {
+      const [hosts, inventory, devices] = await Promise.all([d.hostNames(), d.vmsByMoref(), d.vmDevices()]);
+      const rows = [];
+      for (const vmDev of devices) {
+        const ctx = vmContext(inventory.get(vmDev.moref) ?? vmDev, hosts);
+        if (!ctx) continue;
+        for (const usb of vmDev.array("config.hardware.device").filter((dev) => (xsiType(dev) ?? "").startsWith("VirtualUSB"))) {
+          rows.push([
+            ctx.name,
+            ctx.powerState,
+            (textAt(usb, "deviceInfo/label") ?? "").trim() || null,
+            (xsiType(usb) ?? "").replace(/^Virtual/, ""),
+            boolAt(usb, "connectable/connected"),
+            boolAt(usb, "autoConnectDevices"),
+            textAt(usb, "deviceInfo/summary"),
+            ctx.host,
+            ctx.annotation,
+          ]);
+        }
+      }
+      return rows;
+    },
+  },
+
+  {
+    name: "vTools",
+    group: "Virtual machines",
+    columns: [
+      col.text("VM"),
+      col.text("Powerstate"),
+      col.text("Tools status"),
+      col.text("Tools version status"),
+      col.text("Tools running status"),
+      col.text("Tools version"),
+      col.text("Upgrade policy"),
+      col.bool("Sync time with host"),
+      col.bool("Run after power on"),
+      col.bool("Run after resume"),
+      col.text("Guest state"),
+      col.text("Guest id"),
+      col.text("Guest family"),
+      col.text("DNS Name"),
+      col.text("Host"),
+      col.text("Annotation"),
+    ],
+    async rows(d) {
+      const [hosts, vms] = await Promise.all([d.hostNames(), d.vmInventory()]);
+      const rows = [];
+      for (const vm of vms) {
+        const ctx = vmContext(vm, hosts);
+        if (!ctx) continue;
+        rows.push([
+          ctx.name,
+          ctx.powerState,
+          vm.str("guest.toolsStatus"),
+          vm.str("guest.toolsVersionStatus"),
+          vm.str("guest.toolsRunningStatus"),
+          vm.str("guest.toolsVersion"),
+          vm.str("config.tools.toolsUpgradePolicy"),
+          vm.bool("config.tools.syncTimeWithHost"),
+          vm.bool("config.tools.afterPowerOn"),
+          vm.bool("config.tools.afterResume"),
+          vm.str("guest.guestState"),
+          vm.str("guest.guestId"),
+          vm.str("guest.guestFamily"),
+          vm.str("guest.hostName"),
+          ctx.host,
+          ctx.annotation,
+        ]);
+      }
+      return rows;
+    },
+  },
+
+  {
     name: "vHost",
-    group: "Hosts & clusters",
+    group: "Inventory",
     columns: [
       col.text("Host"),
       col.text("Cluster"),
@@ -682,7 +1142,7 @@ const SHEETS = [
 
   {
     name: "vCluster",
-    group: "Hosts & clusters",
+    group: "Inventory",
     columns: [
       col.text("Name"),
       col.number("NumHosts"),
@@ -731,8 +1191,56 @@ const SHEETS = [
   },
 
   {
+    name: "vRP",
+    group: "Inventory",
+    columns: [
+      col.text("Resource pool"),
+      col.text("Cluster"),
+      col.text("Status"),
+      col.number("# VMs"),
+      col.number("CPU limit MHz"),
+      col.number("CPU reservation MHz"),
+      col.text("CPU level"),
+      col.number("CPU shares"),
+      col.number("CPU usage MHz"),
+      col.number("Memory limit MiB"),
+      col.number("Memory reservation MiB"),
+      col.text("Memory level"),
+      col.number("Memory shares"),
+      col.number("Memory consumed MiB"),
+      col.number("Memory active MiB"),
+    ],
+    async rows(d) {
+      const [pools, clusters] = await Promise.all([d.resourcePools(), d.clusters()]);
+      const clusterNames = new Map(clusters.map((c) => [c.moref, c.str("name")]));
+      return pools.map((pool) => {
+        const name = pool.str("name");
+        if (!name) throw new Error(`ResourcePool ${pool.moref} returned no name property`);
+        const owner = pool.str("owner");
+        return [
+          name,
+          owner ? clusterNames.get(owner) ?? owner : null,
+          pool.str("overallStatus"),
+          pool.array("vm").length,
+          pool.num("config.cpuAllocation.limit"),
+          pool.num("config.cpuAllocation.reservation"),
+          pool.str("config.cpuAllocation.shares.level"),
+          pool.num("config.cpuAllocation.shares.shares"),
+          pool.num("summary.quickStats.overallCpuUsage"),
+          pool.num("config.memoryAllocation.limit"),
+          pool.num("config.memoryAllocation.reservation"),
+          pool.str("config.memoryAllocation.shares.level"),
+          pool.num("config.memoryAllocation.shares.shares"),
+          pool.num("summary.quickStats.hostMemoryUsage"),
+          pool.num("summary.quickStats.guestMemoryUsage"),
+        ];
+      });
+    },
+  },
+
+  {
     name: "vDatastore",
-    group: "Storage",
+    group: "Inventory",
     columns: [
       col.text("Name"),
       col.text("Type"),
@@ -820,6 +1328,443 @@ const SHEETS = [
       return rows;
     },
   },
+  {
+    name: "vHBA",
+    group: "Host network & storage",
+    columns: [
+      col.text("Host"),
+      col.text("Device"),
+      col.text("Type"),
+      col.text("Status"),
+      col.text("Model"),
+      col.text("Driver"),
+      col.text("Driver version"),
+      col.text("Firmware"),
+      col.text("PCI"),
+      col.text("Protocol"),
+      col.text("WWN / iSCSI name"),
+    ],
+    async rows(d) {
+      const rows = [];
+      for (const host of await d.hosts()) {
+        const name = host.str("name");
+        for (const hba of host.array("config.storageDevice.hostBusAdapter")) {
+          // Fibre Channel reports world wide names as decimal numbers; iSCSI has a name instead.
+          const identity = textAt(hba, "portWorldWideName") !== null
+            ? wwn(numberAt(hba, "portWorldWideName"))
+            : textAt(hba, "iScsiName");
+          rows.push([
+            name,
+            textAt(hba, "device"),
+            (xsiType(hba) ?? "").replace(/^Host/, ""),
+            textAt(hba, "status"),
+            textAt(hba, "model"),
+            textAt(hba, "driver"),
+            textAt(hba, "driverVersion"),
+            textAt(hba, "firmwareVersion"),
+            textAt(hba, "pci"),
+            textAt(hba, "storageProtocol"),
+            identity,
+          ]);
+        }
+      }
+      return rows;
+    },
+  },
+
+  {
+    name: "vNIC",
+    group: "Host network & storage",
+    columns: [
+      col.text("Host"),
+      col.text("Network Device"),
+      col.text("Driver"),
+      col.text("Driver version"),
+      col.text("Firmware"),
+      col.text("PCI"),
+      col.number("Speed Mb"),
+      col.bool("Duplex"),
+      col.text("MAC Address"),
+      col.bool("Wake on LAN"),
+    ],
+    async rows(d) {
+      const rows = [];
+      for (const host of await d.hosts()) {
+        const name = host.str("name");
+        for (const nic of host.array("config.network.pnic")) {
+          rows.push([
+            name,
+            textAt(nic, "device"),
+            textAt(nic, "driver"),
+            textAt(nic, "driverVersion"),
+            textAt(nic, "firmwareVersion"),
+            textAt(nic, "pci"),
+            numberAt(nic, "linkSpeed/speedMb"),
+            boolAt(nic, "linkSpeed/duplex"),
+            textAt(nic, "mac"),
+            boolAt(nic, "wakeOnLanSupported"),
+          ]);
+        }
+      }
+      return rows;
+    },
+  },
+
+  {
+    // Standard switches only. Hosts that use distributed switches have none.
+    name: "vSwitch",
+    group: "Host network & storage",
+    columns: [
+      col.text("Host"),
+      col.text("Switch"),
+      col.number("# Ports"),
+      col.number("Free Ports"),
+      col.number("MTU"),
+      col.bool("Promiscuous Mode"),
+      col.bool("Mac Changes"),
+      col.bool("Forged Transmits"),
+      col.text("Uplinks"),
+    ],
+    async rows(d) {
+      const rows = [];
+      for (const host of await d.hosts()) {
+        const name = host.str("name");
+        for (const sw of host.array("config.network.vswitch")) {
+          const uplinks = childElements(sw, "pnic").map((p) => (p.textContent ?? "").split("-").pop()).filter(Boolean);
+          rows.push([
+            name,
+            textAt(sw, "name"),
+            numberAt(sw, "numPorts"),
+            numberAt(sw, "numPortsAvailable"),
+            numberAt(sw, "mtu"),
+            boolAt(sw, "spec/policy/security/allowPromiscuous"),
+            boolAt(sw, "spec/policy/security/macChanges"),
+            boolAt(sw, "spec/policy/security/forgedTransmits"),
+            uplinks.join(", ") || null,
+          ]);
+        }
+      }
+      return rows;
+    },
+  },
+
+  {
+    // Port groups on standard switches.
+    name: "vPort",
+    group: "Host network & storage",
+    columns: [
+      col.text("Host"),
+      col.text("Port Group"),
+      col.text("Switch"),
+      col.number("VLAN"),
+      col.bool("Promiscuous Mode"),
+      col.bool("Mac Changes"),
+      col.bool("Forged Transmits"),
+    ],
+    async rows(d) {
+      const rows = [];
+      for (const host of await d.hosts()) {
+        const name = host.str("name");
+        for (const port of host.array("config.network.portgroup")) {
+          rows.push([
+            name,
+            textAt(port, "spec/name"),
+            textAt(port, "spec/vswitchName"),
+            numberAt(port, "spec/vlanId"),
+            // Port groups usually inherit these from the switch; computedPolicy is what applies.
+            boolAt(port, "spec/policy/security/allowPromiscuous") ?? boolAt(port, "computedPolicy/security/allowPromiscuous"),
+            boolAt(port, "spec/policy/security/macChanges") ?? boolAt(port, "computedPolicy/security/macChanges"),
+            boolAt(port, "spec/policy/security/forgedTransmits") ?? boolAt(port, "computedPolicy/security/forgedTransmits"),
+          ]);
+        }
+      }
+      return rows;
+    },
+  },
+
+  {
+    // VMkernel ports: management, vMotion, storage and so on.
+    name: "vSC_VMK",
+    group: "Host network & storage",
+    columns: [
+      col.text("Host"),
+      col.text("Device"),
+      col.text("Port Group"),
+      col.text("MAC Address"),
+      col.bool("DHCP"),
+      col.text("IP Address"),
+      col.text("Subnet mask"),
+      col.text("Gateway"),
+      col.number("MTU"),
+      col.bool("TSO"),
+      col.text("Stack"),
+    ],
+    async rows(d) {
+      const [hostObjects, portgroups] = await Promise.all([d.hosts(), d.dvPortgroups().catch(() => [])]);
+      const dvNames = new Map((portgroups ?? []).map((pg) => [pg.str("key"), pg.str("name")]));
+      const rows = [];
+      for (const host of hostObjects) {
+        const name = host.str("name");
+        for (const vmk of host.array("config.network.vnic")) {
+          // Standard switches name the port group directly; distributed ones give a key.
+          const dvKey = textAt(vmk, "spec/distributedVirtualPort/portgroupKey");
+          rows.push([
+            name,
+            textAt(vmk, "device"),
+            textAt(vmk, "portgroup") ?? (dvKey ? dvNames.get(dvKey) ?? dvKey : null),
+            textAt(vmk, "spec/mac"),
+            boolAt(vmk, "spec/ip/dhcp"),
+            textAt(vmk, "spec/ip/ipAddress"),
+            textAt(vmk, "spec/ip/subnetMask"),
+            textAt(vmk, "spec/ipRouteSpec/ipRouteConfig/defaultGateway"),
+            numberAt(vmk, "spec/mtu"),
+            boolAt(vmk, "spec/tsoEnabled"),
+            textAt(vmk, "spec/netStackInstanceKey"),
+          ]);
+        }
+      }
+      return rows;
+    },
+  },
+
+  {
+    name: "dvSwitch",
+    group: "Distributed switch",
+    columns: [
+      col.text("Switch"),
+      col.text("Vendor"),
+      col.text("Version"),
+      col.number("# Ports"),
+      col.number("Max Ports"),
+      col.number("# Hosts"),
+      col.text("Created"),
+      col.text("UUID"),
+    ],
+    async rows(d) {
+      return (await d.dvSwitches()).map((sw) => {
+        const product = sw.props.get("summary.productInfo");
+        return [
+          sw.str("name"),
+          product && textAt(product, "vendor"),
+          product && textAt(product, "version"),
+          sw.num("summary.numPorts"),
+          sw.num("config.maxPorts"),
+          sw.array("summary.hostMember").length,
+          sw.str("config.createTime"),
+          sw.str("uuid"),
+        ];
+      });
+    },
+  },
+
+  {
+    name: "dvPort",
+    group: "Distributed switch",
+    columns: [
+      col.text("Port Group"),
+      col.text("Switch"),
+      col.number("# Ports"),
+      col.text("Type"),
+      col.text("VLAN"),
+      col.bool("Promiscuous Mode"),
+      col.bool("Mac Changes"),
+      col.bool("Forged Transmits"),
+    ],
+    async rows(d) {
+      const [portgroups, switches] = await Promise.all([d.dvPortgroups(), d.dvSwitches()]);
+      const switchNames = new Map(switches.map((sw) => [sw.moref, sw.str("name")]));
+      return portgroups.map((pg) => {
+        const config = pg.props.get("config.defaultPortConfig");
+        const sw = pg.str("config.distributedVirtualSwitch");
+        return [
+          pg.str("name"),
+          sw ? switchNames.get(sw) ?? sw : null,
+          pg.num("config.numPorts"),
+          pg.str("config.type"),
+          dvVlan(config),
+          config && dvBool(config, "securityPolicy/allowPromiscuous"),
+          config && dvBool(config, "securityPolicy/macChanges"),
+          config && dvBool(config, "securityPolicy/forgedTransmits"),
+        ];
+      });
+    },
+  },
+
+  {
+    // Live counters from vCenter, newest sample per host.
+    name: "vHost Performance",
+    group: "Performance",
+    columns: [
+      col.text("Host"),
+      col.number("CPU Usage (%)"),
+      col.number("CPU Usage MHz"),
+      col.number("Memory Usage (%)"),
+      col.number("Memory Consumed GiB"),
+      col.number("Network KBps"),
+      col.number("Disk KBps"),
+      col.text("Sampled"),
+    ],
+    async rows(d) {
+      const hosts = await d.hosts();
+      // Only connected hosts report counters.
+      const connected = hosts.filter((h) => h.str("runtime.connectionState") === "connected");
+      const samples = await d.perfSamples("hostPerf", "HostSystem", connected.map((h) => h.moref), HOST_COUNTERS);
+      return hosts.map((host) => {
+        const sample = samples.get(host.moref);
+        const value = (key) => sample?.get(key) ?? null;
+        const consumed = value("memoryConsumed");
+        return [
+          host.str("name"),
+          // vCenter reports percentages in hundredths of a percent.
+          value("cpuPercent") === null ? null : round2(value("cpuPercent") / 100),
+          value("cpuMhz"),
+          value("memoryPercent") === null ? null : round2(value("memoryPercent") / 100),
+          consumed === null ? null : round2(consumed / 1024 / 1024),
+          value("network"),
+          value("disk"),
+          sample?.get("sampledAt") ?? null,
+        ];
+      });
+    },
+  },
+
+  {
+    name: "vInfo Performance",
+    group: "Performance",
+    columns: [
+      col.text("VM"),
+      col.text("Powerstate"),
+      col.number("CPU Usage (%)"),
+      col.number("CPU Usage MHz"),
+      col.number("Memory Usage (%)"),
+      col.number("Memory Active MiB"),
+      col.number("Memory Consumed MiB"),
+      col.number("Network KBps"),
+      col.number("Disk KBps"),
+      col.text("Host"),
+      col.text("Sampled"),
+    ],
+    async rows(d) {
+      const [hosts, vms] = await Promise.all([d.hostNames(), d.vmInventory()]);
+      const listed = vms.filter((vm) => vmContext(vm, hosts));
+      // Powered-off VMs have no counters.
+      const running = listed.filter((vm) => vm.str("runtime.powerState") === "poweredOn");
+      const samples = await d.perfSamples("vmPerf", "VirtualMachine", running.map((vm) => vm.moref), VM_COUNTERS);
+      return listed.map((vm) => {
+        const ctx = vmContext(vm, hosts);
+        const sample = samples.get(vm.moref);
+        const value = (key) => sample?.get(key) ?? null;
+        return [
+          ctx.name,
+          ctx.powerState,
+          value("cpuPercent") === null ? null : round2(value("cpuPercent") / 100),
+          value("cpuMhz"),
+          value("memoryPercent") === null ? null : round2(value("memoryPercent") / 100),
+          value("memoryActive") === null ? null : round2(value("memoryActive") / 1024),
+          value("memoryConsumed") === null ? null : round2(value("memoryConsumed") / 1024),
+          value("network"),
+          value("disk"),
+          ctx.host,
+          sample?.get("sampledAt") ?? null,
+        ];
+      });
+    },
+  },
+
+  {
+    name: "vSource",
+    group: "System",
+    columns: [
+      col.text("Name"),
+      col.text("Full name"),
+      col.text("Vendor"),
+      col.text("Version"),
+      col.text("Build"),
+      col.text("API version"),
+      col.text("API type"),
+      col.text("OS type"),
+      col.text("Instance UUID"),
+      col.text("License product"),
+    ],
+    async rows(d) {
+      const content = await d.serviceContent();
+      const about = childElement(content, "about");
+      if (!about) return [];
+      return [[
+        textAt(about, "name"),
+        textAt(about, "fullName"),
+        textAt(about, "vendor"),
+        textAt(about, "version"),
+        textAt(about, "build"),
+        textAt(about, "apiVersion"),
+        textAt(about, "apiType"),
+        textAt(about, "osType"),
+        textAt(about, "instanceUuid"),
+        textAt(about, "licenseProductName"),
+      ]];
+    },
+  },
+
+  {
+    name: "vLicense",
+    group: "System",
+    columns: [
+      col.text("Name"),
+      col.text("Key"),
+      col.text("Edition"),
+      col.text("Cost unit"),
+      col.number("Total"),
+      col.number("Used"),
+      col.number("Available"),
+      col.text("Expires"),
+    ],
+    async rows(d) {
+      return (await d.licenses()).map((license) => {
+        const total = numberAt(license, "total");
+        const used = numberAt(license, "used");
+        // Extra details arrive as key/value pairs rather than named fields.
+        const property = (key) =>
+          childElements(license, "properties").find((p) => textAt(p, "key") === key);
+        const expiry = property("expirationDate") ?? property("ExpirationDate");
+        return [
+          textAt(license, "name"),
+          textAt(license, "licenseKey"),
+          textAt(license, "editionKey"),
+          textAt(license, "costUnit"),
+          total,
+          used,
+          total !== null && used !== null ? total - used : null,
+          expiry ? textAt(expiry, "value") : "Never",
+        ];
+      });
+    },
+  },
+
+  {
+    name: "vMetaData",
+    group: "System",
+    columns: [
+      col.text("Tool"),
+      col.text("Tool version"),
+      col.text("Collected"),
+      col.text("vCenter"),
+      col.text("vCenter version"),
+      col.text("Username"),
+    ],
+    async rows(d) {
+      const content = await d.serviceContent();
+      const about = childElement(content, "about");
+      return [[
+        "DBH Insights",
+        typeof APP_VERSION === "string" ? APP_VERSION : "",
+        new Date().toISOString(),
+        d.vc.host,
+        about ? `${textAt(about, "version")} build ${textAt(about, "build")}` : null,
+        d.vc.username,
+      ]];
+    },
+  },
+
 ];
 
 /**
