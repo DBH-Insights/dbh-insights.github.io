@@ -12,7 +12,7 @@ A vCenter inventory website that anyone can open, backed by a small helper app e
                                                                         └──────────┘
 ```
 
-- **`collect/`**: the website. Plain HTML/JS, no build step. Every vCenter query is defined here, so new sheets, columns, and layouts ship by redeploying the site.
+- **`collect/`**: the website — a folder in this repository, not a part of any URL. Its *contents* are what you publish; the live site serves them at its root. Plain HTML/JS, no build step. Every vCenter query is defined here, so new sheets, columns, and layouts ship by redeploying the site.
 - **`helper/`**: the desktop helper. It has a settings window where you add, edit, test, and delete any number of vCenters, lives in the system tray, and exposes a pass-through on `127.0.0.1` for vCenter's REST API and read-only SOAP (vim25) queries. It accepts vCenter's self-signed certificate and holds the vCenter sessions. Credentials never reach the website's server.
 
 ## Screenshots
@@ -114,7 +114,7 @@ Where things are stored:
 python3 -m http.server 5500 --bind 127.0.0.1
 ```
 
-Run that from the project root, then open http://localhost:5500/collect/. The helper allows `https://dbh-insights.github.io`, `http://localhost:5500` and `http://127.0.0.1:5500` by default. The website needs helper 0.3.0 or later (for SOAP and performance counters) and says so if an older helper is running.
+Run that from the project root, then open http://localhost:5500/collect/ — the `/collect/` there is just the local folder you're serving from, and the published site has no such path. The helper allows `https://dbh-insights.github.io`, `http://localhost:5500` and `http://127.0.0.1:5500` by default. The website needs helper 0.3.0 or later (for SOAP and performance counters) and says so if an older helper is running.
 
 ## Build installers
 
@@ -163,7 +163,9 @@ npm run icons
 
 ## Deploy the website
 
-Copy the files in `collect/` to your web server. They're static, so any host works (GitHub Pages, Netlify, S3, IIS, nginx), and they use relative links, so the folder can sit anywhere, for example `https://example.com/collect/`. Link to the URL with the trailing slash; most servers redirect `/collect` to `/collect/` automatically. The published site, `https://dbh-insights.github.io`, is allowed by default, so users of that site don't need to change anything. If you host a copy somewhere else, each user adds that site's origin (for example `https://insights.example.com`, with no trailing path) under **Websites allowed to use this helper**. Until they do, the site shows exactly what to add.
+Copy the **contents** of `collect/` — not the folder itself — to wherever you serve from. `collect/` is this repository's source folder; it never has to appear in a URL. The published site lives in the `dbh-insights.github.io` repository, whose root is the web root, so it serves the files at `https://dbh-insights.github.io/` with no `/collect/` in the address, and that origin is allowed by the helper out of the box.
+
+The files are static and reference each other with relative links, so they work equally well one level down — `https://example.com/insights/`, say — as long as you link to the URL with its trailing slash; most servers redirect `/insights` to `/insights/` automatically. Any static host works: GitHub Pages, Netlify, S3, IIS, nginx. If you publish to an origin of your own, each user adds it (for example `https://insights.example.com`, with no trailing path) under **Websites allowed to use this helper**. Until they do, the site shows exactly what to add.
 
 ## Website code
 
