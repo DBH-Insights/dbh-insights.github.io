@@ -98,6 +98,70 @@
     }
   }
 
+
+  // ---- helper downloads ----
+
+  const PLATFORM_ICONS = {
+    mac: "M15.2 12.6c0-2.2 1.8-3.3 1.9-3.4-1-1.5-2.7-1.7-3.3-1.7-1.4-.1-2.7.8-3.4.8-.7 0-1.8-.8-3-.8-1.5 0-2.9.9-3.7 2.3-1.6 2.7-.4 6.8 1.1 9 .8 1.1 1.7 2.3 2.9 2.3 1.2 0 1.6-.7 3-.7s1.8.7 3 .7 2-1.1 2.8-2.2c.9-1.2 1.2-2.4 1.2-2.5-.1 0-2.4-.9-2.5-3.8ZM13 5.9c.6-.8 1-1.8.9-2.9-.9 0-2 .6-2.6 1.4-.6.7-1.1 1.7-.9 2.8 1 0 2-.5 2.6-1.3Z",
+    windows: "M3 5.8 10 4.8v6.7H3V5.8Zm0 12.4 7 1v-6.6H3v5.6Zm8.2 1.2L21 20.8V12.9h-9.8v6.5Zm0-15.6v6.6H21V3.2l-9.8 1.6Z",
+    linux: "M12 2.5c-2.4 0-3.6 2-3.4 4.6.1 1.6-.2 2.4-1 3.6C6.3 12.7 5.4 14.4 5.4 16c0 1 .4 1.6 1 2.2.4.4.3.9.2 1.3-.1.5.2.9.8 1 1 .1 1.7-.2 2.2-.7.4-.4.9-.5 1.4-.5h2c.5 0 1 .1 1.4.5.5.5 1.2.8 2.2.7.6-.1.9-.5.8-1-.1-.4-.2-.9.2-1.3.6-.6 1-1.2 1-2.2 0-1.6-.9-3.3-2.2-5.3-.8-1.2-1.1-2-1-3.6.2-2.6-1-4.6-3.4-4.6Z M10.2 7.4v.1M13.8 7.4v.1",
+  };
+
+  function iconFor(id) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("class", "dl-icon");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", PLATFORM_ICONS[id] ?? "");
+    svg.append(path);
+    return svg;
+  }
+
+  /** The visitor's platform, so their card can be marked. Unknown platforms mark nothing. */
+  function currentPlatform(platforms) {
+    const name = navigator.userAgentData?.platform || navigator.platform || "";
+    return platforms.find((p) => p.detect.test(name))?.id ?? null;
+  }
+
+  function renderDownloads(config) {
+    const box = $("downloads");
+    if (!box) return;
+    box.replaceChildren();
+    const mine = currentPlatform(config.platforms);
+
+    for (const platform of config.platforms) {
+      const card = make("article", `dl-card${platform.id === mine ? " mine" : ""}${platform.file ? "" : " unavailable"}`);
+      card.append(iconFor(platform.id));
+
+      const head = make("div", "dl-head");
+      head.append(make("h3", "", platform.name));
+      if (platform.id === mine) head.append(make("span", "chip chip-latest", "Your platform"));
+      card.append(head);
+      card.append(make("p", "dl-note", platform.note));
+
+      if (platform.file) {
+        const link = make("a", "btn btn-primary dl-btn");
+        // encodeURI keeps the spaces in the file name valid in a URL.
+        link.href = encodeURI(config.folder + platform.file);
+        link.append(make("span", "", `Download ${platform.kind ?? "installer"}`));
+        link.append(make("span", "dl-size", platform.size ?? ""));
+        // The file is served from this site, so a plain link downloads it.
+        link.setAttribute("download", "");
+        card.append(link);
+        card.append(make("p", "dl-file", platform.file));
+      } else {
+        card.append(make("p", "dl-btn dl-none", "No build yet"));
+      }
+
+      if (platform.tip) card.append(richText(make("p", "dl-tip"), platform.tip));
+      box.append(card);
+    }
+
+    const version = $("downloadVersion");
+    if (version) version.textContent = `Helper ${config.version} · works with this website`;
+  }
+
   // ---- screenshot tour: an ARIA tab list with arrow-key movement ----
 
   function setupTour() {
@@ -149,5 +213,6 @@
     openLinkedRelease();
     window.addEventListener("hashchange", openLinkedRelease);
   }
+  if (typeof DOWNLOADS !== "undefined") renderDownloads(DOWNLOADS);
   setupTour();
 })();

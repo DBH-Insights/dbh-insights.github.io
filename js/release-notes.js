@@ -17,6 +17,7 @@ const RELEASE_NOTES = [
     title: "A home page, failure-impact answers, and a tidier site",
     changes: [
       { type: "new", text: "A landing page at the site's root explains what DBH Insights does and lists these release notes. The app itself now opens from `app/`." },
+      { type: "new", text: "The helper can be downloaded from the site itself: a Download section offers the macOS and Windows installers and points out which one matches the visitor's computer." },
       { type: "new", text: "Impact tab: pick a host or datastore and see the VMs that depend on it, whether vSphere HA could restart them, whether the rest of the cluster has the memory to take them, and any datastore only that host can reach." },
       { type: "new", text: "The Impact picker is searchable. Type to filter hundreds of hosts and datastores by name, cluster or datastore type, and use the arrow keys and Enter to choose." },
       { type: "improved", text: "The DBH Insights name in the app's sidebar now links back to the home page." },
