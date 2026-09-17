@@ -5,7 +5,8 @@
 
 const $ = (id) => document.getElementById(id);
 
-const APP_VERSION = "0.3.0";
+// The newest release note is the current version (js/release-notes.js loads first).
+const APP_VERSION = typeof RELEASE_NOTES !== "undefined" ? RELEASE_NOTES[0].version : "dev";
 const INSIGHTS = "Insights";
 const TOPOLOGY = "Topology";
 const IMPACT = "Impact";
