@@ -34,6 +34,7 @@
           <span id="connection" class="conn">Looking for helper…</span>
           <select id="vcenterSelect" aria-label="vCenter" hidden></select>
           <input id="filter" type="search" placeholder="Filter rows…" autocomplete="off" aria-label="Filter rows">
+          <select id="groupBy" aria-label="Group rows by" title="Group rows by a column and total each group" hidden></select>
           <button id="downloadHtml" class="ghost" hidden>Download HTML</button>
           <button id="refresh" class="primary">Refresh</button>
         </div>
@@ -68,6 +69,7 @@
           <table>
             <thead><tr id="headRow"></tr></thead>
             <tbody id="body"></tbody>
+            <tfoot><tr id="footRow"></tr></tfoot>
           </table>
           <p id="tableEmpty" class="table-empty" hidden></p>
         </div>

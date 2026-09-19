@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DBH Insights · vCenter inventory, capacity and failure impact in your browser</title>
-  <meta name="description" content="DBH Insights reads inventory, capacity, health and performance from your vCenters and turns it into a dashboard, a topology map, failure-impact answers and 27 exportable sheets. Read-only, and your credentials never leave your computer.">
+  <meta name="description" content="DBH Insights reads inventory, capacity, health and performance from your vCenters and turns it into a dashboard, a topology map, failure-impact answers, cluster capacity totals and 27 exportable sheets. Read-only, and your credentials never leave your computer.">
   <link rel="stylesheet" href="css/theme.css">
   <link rel="stylesheet" href="css/landing.css">
 </head>
@@ -42,7 +42,7 @@
         <h1>Your whole vSphere estate,<br><span class="grad">one browser tab.</span></h1>
         <p class="lead">
           DBH Insights reads inventory, capacity, health and performance from one or more vCenters and turns it
-          into a live dashboard, a topology map, failure-impact answers and 27 exportable sheets —
+          into a live dashboard, a topology map, failure-impact answers, cluster capacity totals and 27 exportable sheets —
           without your credentials ever leaving your computer.
         </p>
         <div class="hero-actions">
@@ -71,6 +71,62 @@
       </div>
     </section>
 
+    <!-- What's new -->
+    <section class="section section-new" id="whats-new">
+      <div class="wrap">
+        <header class="section-head">
+          <p class="eyebrow">New in v0.5.0</p>
+          <h2>Totals and rollups, built in</h2>
+          <p>The numbers you used to work out in Excel after every export — now right on the screen.</p>
+        </header>
+        <div class="new-grid">
+          <article class="new-card">
+            <div class="new-card-top">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M17 5H7l6 7-6 7h10"/></svg>
+              <span class="new-tag">New</span>
+            </div>
+            <h3>Totals on every sheet</h3>
+            <p>A totals row pinned to the bottom of every table. It covers all pages and follows your filter, so filter vInfo to one cluster and the totals follow.</p>
+            <ul class="ticks">
+              <li>Amounts summed: vCPUs, memory, GiB, VM counts</li>
+              <li>Usage percentages averaged</li>
+              <li>Free % and vCPUs per core worked out from the totals</li>
+              <li>Yes/no columns show how many are True</li>
+            </ul>
+          </article>
+          <article class="new-card">
+            <div class="new-card-top">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="4" rx="1"/><rect x="6" y="10" width="15" height="4" rx="1"/><rect x="6" y="16" width="15" height="4" rx="1"/><path d="M3 10v8h3M3 14h3"/></svg>
+              <span class="new-tag">New</span>
+            </div>
+            <h3>Group by any column</h3>
+            <p>Turn a sheet into a summary: one row per cluster, host, datastore, power state, guest OS or VLAN, with a count and totals for each group.</p>
+            <ul class="ticks">
+              <li>VMs, vCPUs and storage per cluster</li>
+              <li>How many VMs run each guest OS</li>
+              <li>Sort, filter and page the groups</li>
+              <li>Each sheet remembers its grouping</li>
+            </ul>
+          </article>
+          <article class="new-card">
+            <div class="new-card-top">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18a8 8 0 1 1 16 0"/><path d="m12 18 4-6"/><path d="M4 21h16"/></svg>
+              <span class="new-tag">New</span>
+            </div>
+            <h3>Cluster Capacity</h3>
+            <p>One row per cluster comparing what the hosts provide with what the VMs are assigned, under Overview and in the Excel export.</p>
+            <ul class="ticks">
+              <li>Hosts, cores and DRAM against VMs, vCPUs and vRAM</li>
+              <li>vCPU-to-core ratio and running vRAM as a % of DRAM</li>
+              <li>VM storage and datastore free space</li>
+              <li>N+1 check: can it lose its biggest host?</li>
+            </ul>
+          </article>
+        </div>
+        <p class="new-foot"><a class="btn btn-primary btn-sm" href="app/index.html">Try it in the app</a> <a href="#v0.5.0">Read the release notes</a></p>
+      </div>
+    </section>
+
     <!-- Features -->
     <section class="section" id="features">
       <div class="wrap">
@@ -91,7 +147,7 @@
             <h3>Topology map</h3>
             <p>Hosts grouped by cluster, their datastores, and a line for every mount. Hover to isolate one path; download the map to share it.</p>
           </article>
-          <article class="feature feature-accent">
+          <article class="feature">
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.5 20h19L12 3Z"/><path d="M12 10v4.5M12 17.2v.1"/></svg>
             <h3>Failure impact</h3>
             <p>"What if this host or datastore fails?" See the VMs that depend on it, whether HA can restart them, whether the cluster has room, and storage only that host can reach.</p>
@@ -99,7 +155,7 @@
           <article class="feature">
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 14h18M9 4v16"/></svg>
             <h3>27 inventory sheets</h3>
-            <p>VMs, CPU, memory, disks, partitions, networks, snapshots, tools, hosts, clusters, resource pools, datastores, switches and licences. Sort, filter and page through them.</p>
+            <p>VMs, CPU, memory, disks, partitions, networks, snapshots, tools, hosts, clusters, resource pools, datastores, switches and licences. Sort, filter, total and group them, plus a capacity summary for every cluster.</p>
           </article>
           <article class="feature">
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2.5-6 5 12 2.5-6h4"/></svg>

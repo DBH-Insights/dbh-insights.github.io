@@ -473,3 +473,20 @@ dialog .hint { color: var(--text-dim); margin: 0 0 14px; font-size: 12px; }
 
 .impact-scroll { max-height: 46vh; overflow-y: auto; }
 .impact-scroll .mini-table thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+
+/* ---- totals row and grouping ---- */
+
+tfoot td {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: var(--header-bg);
+  border-top: 1px solid var(--border-strong);
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+tfoot td.num { text-align: right; }
+tfoot td.foot-label { color: var(--accent); white-space: nowrap; }
+tfoot tr:hover { background: none; }
+#groupBy { max-width: 220px; }

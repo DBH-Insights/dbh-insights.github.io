@@ -11,6 +11,19 @@
 
 const RELEASE_NOTES = [
   {
+    version: "0.5.0",
+    date: "2026-09-18",
+    helper: "0.3.0",
+    title: "Totals, group-by summaries, and cluster capacity",
+    changes: [
+      { type: "new", text: "Every sheet ends with a totals row that follows the filter and covers every page, not just the one on screen. Amounts are summed, usage percentages are averaged, and ratios such as Free % or vCPUs per Core are worked out from the totals rather than averaged." },
+      { type: "new", text: "Group by: pick a column — cluster, host, datastore, power state, guest OS, VLAN and more — and each sheet becomes one row per group with a count and totals. Sort, filter and page the groups like any sheet." },
+      { type: "new", text: "Cluster Capacity, under Overview: one row per cluster with hosts, cores and DRAM against VM counts, vCPUs, vRAM and storage, the vCPU-to-core ratio, running vRAM as a share of DRAM, and whether the cluster could lose its largest host and still hold its running VMs' memory." },
+      { type: "improved", text: "Yes/no columns show how many are True in the totals row, such as how many clusters have HA enabled." },
+      { type: "improved", text: "Export XLSX includes the Cluster Capacity sheet." },
+    ],
+  },
+  {
     version: "0.4.0",
     date: "2026-09-17",
     helper: "0.3.0",
